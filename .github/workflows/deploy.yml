@@ -1,0 +1,66 @@
+name: Deploy Membership_List to EC2 with Docker
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'temurin'
+        java-version: '21'
+
+    - name: Build JAR file
+      run: |
+        mvn clean package -DskipTests
+
+    - name: Set up Docker permissions
+      run: |
+        sudo chmod 666 /var/run/docker.sock
+
+    - name: Build Docker Image
+      run: |
+        docker build -t membership-list:latest .
+        sudo docker save membership-list:latest > membership-list.tar
+        sudo chmod 644 membership-list.tar
+
+    - name: Transfer Docker Image
+      uses: appleboy/scp-action@v0.1.7
+      with:
+        host: ${{ secrets.MEMBERSHIP_LIST_EC2_HOST }}
+        username: ec2-user
+        key: ${{ secrets.MEMBERSHIP_LIST_EC2_SSH_KEY }}
+        source: membership-list.tar
+        target: /home/ec2-user/
+
+    - name: SSH to EC2 and Deploy
+      uses: appleboy/ssh-action@v0.1.7
+      with:
+        host: ${{ secrets.MEMBERSHIP_LIST_EC2_HOST }}
+        username: ec2-user
+        key: ${{ secrets.MEMBERSHIP_LIST_EC2_SSH_KEY }}
+        script: |
+          # Detener y eliminar el contenedor anterior si existe
+          sudo docker stop membership-list || true
+          sudo docker rm membership-list || true
+
+          # Eliminar la imagen anterior si existe
+          sudo docker rmi membership-list:latest || true
+
+          # Cargar la nueva imagen Docker
+          sudo docker load < /home/ec2-user/membership-list.tar
+
+          # Ejecutar el nuevo contenedor
+          sudo docker run -d -p 8080:8080 --name membership-list membership-list:latest
+
+          # Eliminar el archivo .tar después de cargar la imagen
+          rm /home/ec2-user/membership-list.tar
